@@ -1,0 +1,15 @@
+[Unit]
+Description=FANUC IoT Edge Collector
+After=network.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/opt/fanuc_iot_edge
+ExecStart=/opt/fanuc_iot_edge/venv/bin/python src/manager.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUTF8=1
+
+[Install]
+WantedBy=multi-user.target
