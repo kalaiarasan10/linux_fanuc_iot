@@ -10,7 +10,7 @@ Knowledge base: docs/KNOWLEDGE_BASE.md
 import os
 import sys
 import time
-from ctypes import (Structure, c_short, c_ushort, c_uint8,
+from ctypes import (Structure, Union, c_short, c_ushort, c_uint8,
                     byref, POINTER, sizeof)
 
 # ── Platform: Windows uses chattertools, Linux uses raw .so ───────────────────
@@ -49,6 +49,28 @@ class ODBMACRO(Structure):
 class ODBPRO(Structure):        # Windows confirmed: dummy(long)+data(short)+mdata(short)
     _pack_ = 1
     _fields_ = [("dummy",c_long),("data",c_short),("mdata",c_short)]
+
+# ── Parameter read struct (cnc_rdparam) ──────────────────────────────────────
+MAX_AXIS = 8
+
+class _PARAMDATA(Union):
+    _pack_ = 1
+    _fields_ = [
+        ("cdata",  c_uint8),
+        ("idata",  c_short),
+        ("ldata",  c_long),
+        ("cdatas", c_uint8 * MAX_AXIS),
+        ("idatas", c_short * MAX_AXIS),
+        ("ldatas", c_long  * MAX_AXIS),
+    ]
+
+class IODBPARAM(Structure):
+    _pack_ = 1
+    _fields_ = [
+        ("datano", c_short),
+        ("type",   c_short),
+        ("u",      _PARAMDATA),
+    ]
 
 class ODBALMMSG2(Structure):
     _pack_ = 1
@@ -154,6 +176,12 @@ class FocasReader:
         fn6.restype  = c_short
         fn6.argtypes = [c_ushort,c_short,POINTER(c_short),POINTER(ODBALMMSG2)]
         self._fn_alarm = fn6
+
+        # Parameter read
+        fn8 = lib.cnc_rdparam
+        fn8.restype  = c_short
+        fn8.argtypes = [c_ushort, c_short, c_short, c_short, POINTER(IODBPARAM)]
+        self._fn_param = fn8
 
     # ── Read single PMC bit ───────────────────────────────────────────────────
     def _read_bit(self, pmc_type: str, byte_no: int, bit_no: int) -> bool:
@@ -294,6 +322,50 @@ class FocasReader:
             c_long(int_val),
         )
         return ret == 0
+
+    # ── Read machine parameter ────────────────────────────────────────────────
+    def read_param(self, param_no: int, axis: int = 0):
+        """
+        Read a FANUC machine parameter.
+        axis=0  → non-axis parameter (single value)
+        axis=1  → X axis
+        axis=2  → Y axis
+        axis=3  → Z axis
+        axis=-1 → all axes (returns dict {X, Y, Z})
+
+        Returns int value, or dict if axis=-1, or None on error.
+
+        Examples:
+            reader.read_param(6757)          → 32  (non-axis param)
+            reader.read_param(1815, axis=1)  → 48  (X axis)
+            reader.read_param(1815, axis=-1) → {"X":48, "Y":48, "Z":48}
+        """
+        AXIS_NAMES = {1: "X", 2: "Y", 3: "Z", 4: "A", 5: "B"}
+
+        if axis == -1:
+            # Read all axes
+            result = {}
+            for ax in range(1, MAX_AXIS + 1):
+                buf = IODBPARAM()
+                ret = self._fn_param(
+                    self.handle, c_short(param_no),
+                    c_short(ax), c_short(sizeof(IODBPARAM)), byref(buf)
+                )
+                if ret == 0:
+                    name = AXIS_NAMES.get(ax, f"A{ax}")
+                    result[name] = int(buf.u.cdata)
+                else:
+                    break
+            return result if result else None
+
+        buf = IODBPARAM()
+        ret = self._fn_param(
+            self.handle, c_short(param_no),
+            c_short(axis), c_short(sizeof(IODBPARAM)), byref(buf)
+        )
+        if ret == 0:
+            return int(buf.u.cdata)
+        return None
 
     # ── Read ALL data — main method called by collector ───────────────────────
     def read_all(self, macro_vars: list, cfg: dict) -> dict:
