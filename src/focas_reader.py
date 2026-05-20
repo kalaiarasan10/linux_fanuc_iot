@@ -16,13 +16,12 @@ from ctypes import (Structure, c_short, c_ushort, c_uint8,
 # ── Platform: Windows uses chattertools, Linux uses raw .so ───────────────────
 if sys.platform == "win32":
     import chattertools as ch
+    from ctypes import c_long           # Windows: c_long = 4 bytes (correct)
     _WINDOWS = True
 else:
     import ctypes
-    from ctypes import c_int32 as c_long   # Linux x64: c_long=8 bytes (wrong for FOCAS)
+    from ctypes import c_int32 as c_long   # Linux x64: c_long=8 bytes, FOCAS needs 4
     _WINDOWS = False
-
-from ctypes import c_long   # Windows: c_long = 4 bytes (correct)
 
 # ── PMC type codes ────────────────────────────────────────────────────────────
 PMC_TYPE = {"G":0,"F":1,"Y":2,"X":3,"A":4,"R":5,"T":6,"K":7,"C":8,"D":9}
@@ -143,10 +142,11 @@ class FocasReader:
         fn7.argtypes = [c_ushort, c_long, c_short, c_short, c_long]
         self._fn_macro_wr = fn7
 
-        # Program number (Windows confirmed working)
+        # Program number — different ABI on Windows vs Linux
         fn5 = lib.cnc_rdprgnum
         fn5.restype  = c_short
-        fn5.argtypes = [c_ushort, POINTER(ODBPRO)]
+        fn5.argtypes = ([c_ushort, POINTER(ODBPRO)] if _WINDOWS
+                        else [c_ushort, POINTER(c_short)])
         self._fn_prog = fn5
 
         # Alarm
@@ -229,12 +229,18 @@ class FocasReader:
 
     # ── Read program number ───────────────────────────────────────────────────
     def _read_prog(self) -> int:
-        buf = ODBPRO()
-        ret = self._fn_prog(self.handle, byref(buf))
-        if ret == 0:
-            for n in (int(buf.data), int(buf.mdata)):
-                if 1 <= n <= 99999999:
-                    return n
+        if _WINDOWS:
+            buf = ODBPRO()
+            ret = self._fn_prog(self.handle, byref(buf))
+            if ret == 0:
+                for n in (int(buf.data), int(buf.mdata)):
+                    if 1 <= n <= 99999999:
+                        return n
+        else:
+            buf = (c_short * 2)()
+            ret = self._fn_prog(self.handle, byref(buf))
+            if ret == 0:
+                return int(buf[0])
         return 0
 
     # ── Read alarm ────────────────────────────────────────────────────────────
