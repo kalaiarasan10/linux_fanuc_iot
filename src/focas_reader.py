@@ -97,7 +97,7 @@ _EXT_ALM_TEXT = {
     1004:"External Alarm 4 (EAX4)",
     1005:"External Alarm 5 (EAX5)",
     1006:"External Alarm 6 (EAX6)",
-    1007:"External Alarm 7 — check door/safety/interlock (EAX7)",
+    1007:"Emergency is activated",
     1008:"External Alarm 8 (EAX8)",
     1009:"External Alarm 9 (EAX9)",
 }
