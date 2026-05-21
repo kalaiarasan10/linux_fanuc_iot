@@ -78,6 +78,30 @@ class ODBALMMSG2(Structure):
     _fields_ = [("alm_no",c_long),("type",c_short),("axis",c_short),
                 ("msg_len",c_short),("msg",c_uint8*32)]
 
+class ODBTOFS(Structure):           # tool offset
+    _pack_ = 1
+    if not _WINDOWS: _layout_ = 'ms'
+    _fields_ = [("datano",c_short),("type",c_short),("data",c_long),("dec",c_short)]
+
+class ODBPARAM_LONG(Structure):     # single long param (e.g. 6711, 6712)
+    _pack_ = 1
+    if not _WINDOWS: _layout_ = 'ms'
+    _fields_ = [("datano",c_short),("type",c_short),("ldata",c_long)]
+
+# External alarm text lookup (ALM-1000 to 1015 come from PMC EAX signals)
+_EXT_ALM_TEXT = {
+    1000:"External Alarm 0 — check PMC ladder (EAX0)",
+    1001:"External Alarm 1 (EAX1)",
+    1002:"External Alarm 2 (EAX2)",
+    1003:"External Alarm 3 (EAX3)",
+    1004:"External Alarm 4 (EAX4)",
+    1005:"External Alarm 5 (EAX5)",
+    1006:"External Alarm 6 (EAX6)",
+    1007:"External Alarm 7 — check door/safety/interlock (EAX7)",
+    1008:"External Alarm 8 (EAX8)",
+    1009:"External Alarm 9 (EAX9)",
+}
+
 
 class FocasReader:
     """Reads all CNC data. Call connect() first, then read_all()."""
@@ -177,11 +201,21 @@ class FocasReader:
         fn6.argtypes = [c_ushort,c_short,POINTER(c_short),POINTER(ODBALMMSG2)]
         self._fn_alarm = fn6
 
-        # Parameter read
+        # Parameter read (generic — uses c_void_p for buffer)
         fn8 = lib.cnc_rdparam
         fn8.restype  = c_short
-        fn8.argtypes = [c_ushort, c_short, c_short, c_short, POINTER(IODBPARAM)]
+        if _WINDOWS:
+            fn8.argtypes = [c_ushort, c_short, c_short, c_short, POINTER(IODBPARAM)]
+        else:
+            import ctypes as _ct
+            fn8.argtypes = [c_ushort, c_short, c_short, c_short, _ct.c_void_p]
         self._fn_param = fn8
+
+        # Tool offset
+        fn9 = lib.cnc_rdtofs
+        fn9.restype  = c_short
+        fn9.argtypes = [c_ushort, c_short, c_short, c_short, POINTER(ODBTOFS)]
+        self._fn_tofs = fn9
 
     # ── Read single PMC bit ───────────────────────────────────────────────────
     def _read_bit(self, pmc_type: str, byte_no: int, bit_no: int) -> bool:
@@ -277,6 +311,65 @@ class FocasReader:
                         return n
         return 0
 
+    # ── Read CNC built-in part counter (params 6712 / 6711) ──────────────────
+    def _read_partcount_cnc(self) -> dict:
+        """
+        Reads FANUC built-in workpiece counter (incremented automatically at M30).
+          6712 = parts done (actual count)
+          6711 = parts required (target set by operator)
+        Returns {"done": int, "required": int} or empty dict on failure.
+        """
+        result = {}
+        for pno, key in [(6712, "done"), (6711, "required")]:
+            try:
+                buf = ODBPARAM_LONG()
+                if _WINDOWS:
+                    ret = self._fn_param(self.handle, c_short(pno), c_short(0),
+                                         c_short(sizeof(ODBPARAM_LONG)), byref(buf))
+                else:
+                    import ctypes as _ct
+                    ret = self._fn_param(self.handle, c_short(pno), c_short(0),
+                                         c_short(sizeof(ODBPARAM_LONG)),
+                                         _ct.cast(byref(buf), _ct.c_void_p))
+                if ret == 0:
+                    result[key] = int(buf.ldata)
+            except Exception:
+                pass
+        return result
+
+    # ── Read tool offsets (H geometry + H wear for tools 1-N) ────────────────
+    def read_tool_offsets(self, max_tools: int = 16) -> list:
+        """
+        Returns list of dicts: [{"tool": 1, "h_geom_mm": 216.265, "h_wear_mm": 0.0}, ...]
+        Only tools with non-zero offsets are returned.
+        Unit: raw value is IS-B (0.001mm) → displayed in mm (divide by 1000).
+        type=3 = H geometry  |  type=0 = H wear
+        """
+        offsets = []
+        for tno in range(1, max_tools + 1):
+            h_geom = h_wear = None
+            for tp, key in [(3, "h_geom"), (0, "h_wear")]:
+                buf = ODBTOFS()
+                ret = self._fn_tofs(self.handle, c_short(tno), c_short(tp),
+                                    c_short(sizeof(ODBTOFS)), byref(buf))
+                if ret == 0:
+                    dec = int(buf.dec)
+                    raw = buf.data
+                    # IS-B: dec=0 → raw in 0.001mm → divide by 1000
+                    val = raw / (10 ** dec) if dec > 0 else raw / 1000.0
+                    if key == "h_geom":
+                        h_geom = round(val, 3)
+                    else:
+                        h_wear = round(val, 3)
+            if h_geom is not None or h_wear is not None:
+                if (h_geom or 0) != 0 or (h_wear or 0) != 0:
+                    offsets.append({
+                        "tool":      tno,
+                        "h_geom_mm": h_geom or 0.0,
+                        "h_wear_mm": h_wear or 0.0,
+                    })
+        return offsets
+
     # ── Read alarm ────────────────────────────────────────────────────────────
     # FANUC alarm type codes → human readable
     _ALM_TYPE = {
@@ -293,9 +386,12 @@ class FocasReader:
         if ret == 0 and num.value > 0 and buf.alm_no != 0:
             msg = bytes(buf.msg[:buf.msg_len]).decode("ascii", "replace").strip()
             if not msg:
-                # FOCAS returned no text — build description from type + axis
-                tname = self._ALM_TYPE.get(int(buf.type), f"TYPE-{buf.type}")
-                msg   = tname + (f" AXIS-{buf.axis}" if buf.axis > 0 else "")
+                # Use lookup for external alarms, fall back to type+axis
+                msg = _EXT_ALM_TEXT.get(
+                    int(buf.alm_no),
+                    self._ALM_TYPE.get(int(buf.type), f"TYPE-{buf.type}")
+                    + (f" AXIS-{buf.axis}" if buf.axis > 0 else "")
+                )
             return f"ALM-{buf.alm_no}: {msg}"
         return None
 
@@ -402,16 +498,21 @@ class FocasReader:
         for var in macro_vars:
             macros[str(var)] = self._read_macro(var)
 
+        # CNC built-in part counter (param 6712=done, 6711=required)
+        cnc_parts = self._read_partcount_cnc()
+
         return {
-            "auto_exec":  ae,
-            "cutting":    cut,
-            "spindle_on": scw or scc,
-            "feed_hold":  fh,      # NEW: feed hold active
-            "block_stop": bs,      # NEW: M00/M01/single block active
-            "m30_fired":  m30_fired,  # NEW: True only on the tick M30 was detected
-            "prog_num":   self._read_prog(),
-            "feed_rate":  self._read_feed(),
-            "alarm":      self._read_alarm(),
-            "parts_m30":  self._parts_m30,
-            "macros":     macros,
+            "auto_exec":      ae,
+            "cutting":        cut,
+            "spindle_on":     scw or scc,
+            "feed_hold":      fh,
+            "block_stop":     bs,
+            "m30_fired":      m30_fired,
+            "prog_num":       self._read_prog(),
+            "feed_rate":      self._read_feed(),
+            "alarm":          self._read_alarm(),
+            "parts_m30":      self._parts_m30,
+            "parts_done":     cnc_parts.get("done"),       # CNC counter (param 6712)
+            "parts_required": cnc_parts.get("required"),   # CNC target  (param 6711)
+            "macros":         macros,
         }
