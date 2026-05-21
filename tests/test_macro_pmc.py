@@ -6,7 +6,7 @@ test_macro_pmc.py
 3. Check A0.0 (emergency signal)
 4. Check F1.7, F1.1, G8.0 raw byte + bit
 """
-import os, sys, ctypes
+import os, sys, ctypes, time
 from ctypes import (Structure, c_short, c_ushort, c_uint8,
                     c_int32 as c_long, byref, POINTER, sizeof)
 
@@ -59,13 +59,28 @@ def write_macro_struct(h, var_no, value):
     return lib.cnc_wrmacro(h,c_long(var_no),c_short(sizeof(IODBMR)),byref(buf))
 
 def write_macro_5arg(h, var_no, value):
-    """Method B: 5 direct args (handle, var_no, length, dec, value)"""
+    """Method B: 5-arg direct (handle, var_no, length=14, dec, value)"""
     lib.cnc_wrmacro.restype  = c_short
     lib.cnc_wrmacro.argtypes = [c_ushort,c_long,c_short,c_short,c_long]
-    # sizeof(ODBMACRO) = 14 — same as read struct
     dec = 4 if value != int(value) else 0
     raw = int(round(value * (10**dec)))
     return lib.cnc_wrmacro(h,c_long(var_no),c_short(14),c_short(dec),c_long(raw))
+
+def write_macro_5arg_len10(h, var_no, value):
+    """Method C: 5-arg direct (handle, var_no, length=10, dec, value)"""
+    lib.cnc_wrmacro.restype  = c_short
+    lib.cnc_wrmacro.argtypes = [c_ushort,c_long,c_short,c_short,c_long]
+    dec = 4 if value != int(value) else 0
+    raw = int(round(value * (10**dec)))
+    return lib.cnc_wrmacro(h,c_long(var_no),c_short(10),c_short(dec),c_long(raw))
+
+def write_macro_5arg_len12(h, var_no, value):
+    """Method D: 5-arg direct (handle, var_no, length=12, dec, value)"""
+    lib.cnc_wrmacro.restype  = c_short
+    lib.cnc_wrmacro.argtypes = [c_ushort,c_long,c_short,c_short,c_long]
+    dec = 4 if value != int(value) else 0
+    raw = int(round(value * (10**dec)))
+    return lib.cnc_wrmacro(h,c_long(var_no),c_short(12),c_short(dec),c_long(raw))
 
 def pmc_byte(h, atype, byte_no):
     buf=IODBPMC()
@@ -101,21 +116,60 @@ def main():
            5:"EW_DATA (alarm active / data error)",6:"EW_NOOPT",
            7:"EW_PROT (write protected)"}
 
-    for method, fn in [("A – IODBMR struct", write_macro_struct),
-                       ("B – 5-arg direct",  write_macro_5arg)]:
-        before, _ = read_macro(h, 501)
-        ret = fn(h, 501, 50)
-        if ret == 0:
-            after, _ = read_macro(h, 501)
-            ok_str = "✅ CONFIRMED" if after == 50.0 else f"⚠️  got {after}"
-            print(f"  Method {method}: ret=0  #501={after}  {ok_str}")
-            break
+    # Check param 6001 for macro write protection (bit4 = NMC)
+    class ODBPARAM(Structure):
+        _pack_=1;_layout_='ms'
+        _fields_=[("datano",c_short),("type",c_short),("ldata",c_long)]
+    lib.cnc_rdparam.restype  = c_short
+    lib.cnc_rdparam.argtypes = [c_ushort,c_short,c_short,c_short,ctypes.c_void_p]
+    pb=ODBPARAM()
+    rp=lib.cnc_rdparam(h,c_short(6001),c_short(0),c_short(8),
+                       ctypes.cast(byref(pb),ctypes.c_void_p))
+    if rp==0:
+        nmc = (pb.ldata>>4)&1
+        print(f"  Param 6001 = 0x{pb.ldata:04X}  bit4(NMC/macro-protect)={nmc}")
+        if nmc:
+            print(f"  ⚠️  NMC=1 → Macro write protection ON! Cannot write via FOCAS2.")
         else:
-            print(f"  Method {method}: ret={ret}  {ERR.get(ret,'')}")
+            print(f"  ✅ NMC=0 → Macro write protection OFF — writes should work.")
+    else:
+        print(f"  param 6001 read failed ret={rp}")
 
-    print(f"\n  ⚠️  If both fail with ret=5 while ALM-1007 is active →")
-    print(f"     FANUC blocks macro writes during Emergency Stop.")
-    print(f"     Clear the alarm first, then retry.")
+    confirmed = False
+    methods = [
+        ("A – IODBMR struct (len=12)", write_macro_struct),
+        ("B – 5-arg len=14",           write_macro_5arg),
+        ("C – 5-arg len=10",           write_macro_5arg_len10),
+        ("D – 5-arg len=12",           write_macro_5arg_len12),
+    ]
+    for method, fn in methods:
+        ret = fn(h, 501, 50)
+        time.sleep(0.3)   # give CNC time to commit
+        after, _ = read_macro(h, 501)
+        if ret == 0:
+            if after == 50.0:
+                print(f"  Method {method}: ret=0  #501={after}  ✅ CONFIRMED")
+                confirmed = True
+                break
+            else:
+                print(f"  Method {method}: ret=0  #501={after}  ⚠️  not persisted")
+        else:
+            print(f"  Method {method}: ret={ret}  {ERR.get(ret,'unknown')}")
+
+    if not confirmed:
+        print(f"\n  ── Machine State ─────────────────────────────────────────")
+        for atype,bno,lbl in [("F",0,"F0 (SA=b6,STL=b5,SPL=b4,OP=b7)"),
+                               ("F",1,"F1 (MA=b7,ENB=b4,DEN=b3,RST=b1,AL=b0)"),
+                               ("F",3,"F3 (MAUTO=b5,MMDI=b3,MJOG=b2,DNC=b4)"),
+                               ("A",0,"A0 (EMG)")]:
+            bv = pmc_byte(h, atype, bno)
+            if bv is not None:
+                bits = ''.join(str((bv>>i)&1) for i in range(7,-1,-1))
+                print(f"  {lbl}: 0x{bv:02X} = {bits}")
+        print(f"\n  ── Action required ───────────────────────────────────────")
+        print(f"  1. Check param 6001 bit4 (NMC) on the CNC panel")
+        print(f"  2. Press RESET on the machine panel, then retry")
+        print(f"  3. Macro write only works when machine is NOT in alarm/reset")
 
     # ── 3. Check A0.0 — Emergency Stop Signal ────────────────────────────────
     section("3.  A0.0 — Emergency Signal (ALM-1007 source)")

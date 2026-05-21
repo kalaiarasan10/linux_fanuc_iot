@@ -241,25 +241,26 @@ def main():
     print(f"  {'───────':<9} {'───────────────────':<28} {'─────':<8} {'─────────────'}")
 
     signals = [
-        # addr           FANUC / machine signal name
-        ("F", 0,7,  "OP   – Auto Operation"),        # ✅ confirmed correct
-        ("F", 0,6,  "STL  – Cycle Start Lamp"),      # ✅ confirmed correct
-        ("F", 0,5,  "SPL  – Feed Hold Lamp"),        # ✅ confirmed correct
-        ("F", 0,4,  "AL   – Alarm"),
-        ("F", 0,3,  "RST  – Reset"),
-        ("F", 0,2,  "SA   – Spindle Speed Arrive"),
-        ("F", 0,1,  "ENB  – Enable"),
-        ("F", 0,0,  "MA   – Servo Ready"),
-        ("F", 1,7,  "EMG  – Emergency Stop Active"), # ON during ALM-1007
-        ("F", 1,1,  "RST  – Reset Signal"),          # ✅ user confirmed
-        ("F", 1,0,  "MF   – M-func Strobe"),
-        ("F", 2,6,  "CUT  – Cutting Active"),        # ✅ confirmed correct
-        ("A", 0,7,  "ESP  – Emergency Stop (A0.7)"), # source of ALM-1007
-        ("G",70,5,  "SFR  – Spindle Forward"),       # ✅ confirmed correct
-        ("G",70,6,  "SRV  – Spindle Reverse"),       # ✅ confirmed (G70.6)
-        ("G", 8,0,  "IT   – Interlock"),             # ✅ user confirmed
-        ("G",46,1,  "SBK  – Single Block / Block Stop"),
-        ("G",43,0,  "SPSTP– Spindle Stop"),
+        # addr           FANUC / machine signal name  (verified via PMC Symbol Viewer)
+        ("F", 0,7,  "OP    – Automatic Operation"),   # F0.7=OP
+        ("F", 0,6,  "SA    – Servo Ready Compl"),     # F0.6=SA  ← was wrongly STL
+        ("F", 0,5,  "STL   – Cycle Start Lamp"),      # F0.5=STL ← was wrongly SPL
+        ("F", 0,4,  "SPL   – Feed Hold Lamp"),        # F0.4=SPL ← was wrongly AL
+        ("F", 1,0,  "AL    – Alarm Signal"),          # F1.0=AL  ← was wrongly MF
+        ("F", 1,1,  "RST   – Resetting Signal"),      # F1.1=RST ✅
+        ("F", 1,3,  "DEN   – Distribution End"),      # F1.3=DEN
+        ("F", 1,4,  "ENB   – Spindle Enable"),        # F1.4=ENB
+        ("F", 1,7,  "MA    – Servo Ready (CNC Sig)"), # F1.7=MA  ← was wrongly EMG
+        ("F", 2,6,  "GIS   – G01 Cutting Feed"),      # F2.6=GIS ✅
+        ("F", 7,0,  "MF    – M-func Strobe"),         # F7.0=MF  ← was wrongly F1.0
+        ("F",62,7,  "PRTSF – Part Count Reached"),    # F62.7=PRTSF (from PMC viewer)
+        ("F",64,0,  "TLCH  – Tool Change Signal"),    # F64.0=TLCH
+        ("A", 0,7,  "ESP   – Emergency Stop (A0.7)"), # A0.7=ESP (source of ALM-1007)
+        ("G",70,5,  "SFR   – Spindle Forward"),       # G70.5=SFR ✅
+        ("G",70,6,  "SRV   – Spindle Reverse"),       # G70.6=SRV ✅
+        ("G", 8,0,  "IT    – Interlock"),             # G8.0=IT  ✅
+        ("G",46,1,  "SBK   – Single Block"),          # G46.1=SBK
+        ("G",43,0,  "SPSTP – Spindle Stop"),          # G43.0=SPSTP
     ]
 
     prev_byte = None
