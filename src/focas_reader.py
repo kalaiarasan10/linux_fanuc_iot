@@ -265,10 +265,16 @@ class FocasReader:
                     if 1 <= n <= 99999999:
                         return n
         else:
-            buf = (c_short * 2)()
-            ret = self._fn_prog(self.handle, byref(buf))
+            # Linux: cnc_rdprgnum writes ODBPRO layout (dummy[4]+data[2]+mdata[2])
+            # but argtypes expect POINTER(c_short) — use 4-short buffer and read [2]
+            buf = (c_short * 4)()
+            import ctypes as _ct
+            ret = self._fn_prog(self.handle, _ct.cast(buf, POINTER(c_short)))
             if ret == 0:
-                return int(buf[0])
+                # buf[2] = data (current prog), buf[3] = mdata (main prog)
+                for n in (int(buf[2]), int(buf[3])):
+                    if 1 <= n <= 99999999:
+                        return n
         return 0
 
     # ── Read alarm ────────────────────────────────────────────────────────────
