@@ -357,6 +357,11 @@ def api_delete_machine(machine_id):
     # Stop collector first
     _stop_collector(machine_id)
     os.remove(path)
+    # Also delete status JSON so Live Data card disappears immediately
+    safe_id = "".join(c if c.isalnum() or c in "-_." else "_" for c in machine_id)
+    status_path = os.path.join(STATUS_DIR, f"{safe_id}.json")
+    if os.path.exists(status_path):
+        os.remove(status_path)
     _log(f"Machine deleted: {machine_id}")
     return jsonify({"ok": True})
 
