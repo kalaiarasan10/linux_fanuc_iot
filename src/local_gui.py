@@ -1379,4 +1379,4 @@ if __name__ == "__main__":
         import webbrowser
         webbrowser.open(f"http://localhost:{GUI_PORT}")
     threading.Thread(target=_open_browser, daemon=True).start()
-    app.run(host="127.0.0.1", port=GUI_PORT, debug=False, threaded=True)
+    app.run(host="0.0.0.0", port=GUI_PORT, debug=False, threaded=True)
