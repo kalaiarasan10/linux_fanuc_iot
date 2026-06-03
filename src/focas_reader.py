@@ -133,10 +133,12 @@ class FocasReader:
             import ctypes
             self.lib    = ctypes.CDLL(lib_path, mode=0x00001)
             h = c_ushort(0)
-            self.lib.cnc_allclibhndl3(
+            ret = self.lib.cnc_allclibhndl3(
                 self.ip.encode(), c_ushort(self.port),
                 c_long(self.timeout), byref(h)
             )
+            if ret != 0:
+                raise ConnectionError(f"FANUC CNC not reachable at {self.ip}:{self.port} (error code: {ret})")
             self.handle = h
         self._setup_fns()
 
