@@ -130,6 +130,10 @@ class FocasReader:
             self.handle = self.focas.handle
         else:
             lib_path = os.path.join(os.path.dirname(__file__), "lib", "libfwlib32.so")
+            # FOCAS2 requires fwlibeth.log to exist in CWD before loading
+            log_file = os.path.join(os.getcwd(), "fwlibeth.log")
+            if not os.path.exists(log_file):
+                open(log_file, "w").close()
             import ctypes
             self.lib    = ctypes.CDLL(lib_path, mode=0x00001)
             h = c_ushort(0)
