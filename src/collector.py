@@ -258,6 +258,7 @@ def main():
             _STATUS["cnc_connected"] = False
             _STATUS["last_error"]    = str(e)
             print(f"  ❌ CNC connection failed: {e}  — retry in 30s")
+            _write_status(MACHINE_ID, None, _STATUS["buffered"], False, str(e)[:120])
             time.sleep(30)
             continue
 
